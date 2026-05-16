@@ -102,15 +102,17 @@ export function MealCard({
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 self-end sm:self-auto">
+                  <div className="flex items-center gap-1 sm:self-auto">
                     <GramsControl
                       value={it.grams}
                       step={stepForFood(food.gramsPerUnit)}
                       onChange={(g) => onItemGramsChange(it.id, g)}
+                      className="flex-1 sm:flex-initial"
                     />
                     <Button
                       variant="ghost"
-                      size="icon"
+                      size="icon-lg"
+                      className="shrink-0"
                       onClick={() => onItemRemove(it.id)}
                       title="Remove item"
                     >

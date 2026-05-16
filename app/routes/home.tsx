@@ -8,7 +8,7 @@ import { MacroTargets } from "~/components/plan/macro-targets"
 import { MacroTotals } from "~/components/plan/macro-totals"
 import { MealCard } from "~/components/plan/meal-card"
 import { SEED_FOODS } from "~/lib/foods"
-import { nextId, useLocalStorage } from "~/lib/hooks"
+import { nextId, useLocalStorage, useScrollHidden } from "~/lib/hooks"
 import { GOAL_LABELS, defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
 import { exportPlanToPdf } from "~/lib/pdf"
 import { DEFAULT_CLIENT, makeDay, makeMeal } from "~/lib/plan-defaults"
@@ -43,6 +43,9 @@ export default function Home() {
 
   // Mobile-only: collapse the client + targets section once the coach has filled it in.
   const [clientOpen, setClientOpen] = useState(true)
+
+  // Mobile-only: hide the header when scrolling down so the meal plan gets more space.
+  const headerHidden = useScrollHidden()
 
   // Recalculate targets when client data changes — unless the coach has overridden them.
   const prevClientRef = useRef(client)
@@ -211,7 +214,12 @@ export default function Home() {
 
   return (
     <div className="bg-muted/30 min-h-svh">
-      <header className="bg-background sticky top-0 z-20 border-b">
+      <header
+        className={cn(
+          "bg-background sticky top-0 z-20 border-b transition-transform duration-200",
+          headerHidden && "-translate-y-full lg:translate-y-0"
+        )}
+      >
         <div className="container mx-auto flex items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-2">
             <FileText className="text-primary size-5" />
@@ -270,8 +278,14 @@ export default function Home() {
 
         {/* Center column: meal plan */}
         <section className="space-y-3 lg:col-span-5">
-          {/* Sticky macro totals on mobile, normal flow on desktop */}
-          <div className="bg-muted/30 sticky top-[3.25rem] z-10 -mx-4 px-4 py-2 lg:static lg:bg-transparent lg:mx-0 lg:px-0 lg:py-0">
+          {/* Sticky macro totals on mobile, normal flow on desktop.
+              Top moves up when the header hides so there's no empty gap. */}
+          <div
+            className={cn(
+              "bg-muted/30 sticky z-10 -mx-4 px-4 py-2 transition-[top] duration-200 lg:static lg:bg-transparent lg:mx-0 lg:px-0 lg:py-0",
+              headerHidden ? "top-0" : "top-[3.25rem]"
+            )}
+          >
             <MacroTotals actual={dayTotals} target={targets} />
           </div>
 

@@ -38,7 +38,7 @@ export function GramsControl({
     >
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-lg"
         className="rounded-r-none"
         onClick={dec}
         disabled={value <= 0}
@@ -54,14 +54,14 @@ export function GramsControl({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
-        className="h-9 w-14 rounded-none border-0 px-1 text-center tabular-nums focus-visible:ring-0"
+        className="h-9 min-w-14 flex-auto rounded-none border-0 px-1 text-center tabular-nums focus-visible:ring-0 sm:w-16 sm:flex-none"
       />
       {divider}
-      <span className="text-muted-foreground px-2 py-1 text-xs">g</span>
+      <span className="text-muted-foreground px-3 py-1 text-sm">g</span>
       {divider}
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-lg"
         className="rounded-l-none"
         onClick={inc}
         aria-label={`Increase by ${step}g`}
