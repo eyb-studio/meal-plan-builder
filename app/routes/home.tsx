@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react"
-import { Download, FileText, Plus, X } from "lucide-react"
+import { ChevronDown, Download, FileText, Plus, X } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card"
 import { ClientForm } from "~/components/plan/client-form"
@@ -9,10 +9,11 @@ import { MacroTotals } from "~/components/plan/macro-totals"
 import { MealCard } from "~/components/plan/meal-card"
 import { SEED_FOODS } from "~/lib/foods"
 import { nextId, useLocalStorage } from "~/lib/hooks"
-import { defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
+import { GOAL_LABELS, defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
 import { exportPlanToPdf } from "~/lib/pdf"
 import { DEFAULT_CLIENT, makeDay, makeMeal } from "~/lib/plan-defaults"
 import type { Client, Day, Food, Macros } from "~/lib/types"
+import { cn } from "~/lib/utils"
 
 export function meta() {
   return [
@@ -39,6 +40,9 @@ export default function Home() {
 
   // Picker state — which meal is currently being edited.
   const [pickerMealId, setPickerMealId] = useState<string | null>(null)
+
+  // Mobile-only: collapse the client + targets section once the coach has filled it in.
+  const [clientOpen, setClientOpen] = useState(true)
 
   // Recalculate targets when client data changes — unless the coach has overridden them.
   const prevClientRef = useRef(client)
@@ -221,20 +225,55 @@ export default function Home() {
       </header>
 
       <main className="container mx-auto grid grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-12">
-        {/* Left column: client + targets */}
-        <section className="space-y-4 lg:col-span-3">
-          <ClientForm client={client} onChange={setClient} />
-          <MacroTargets
-            targets={targets}
-            onChange={handleTargetsChange}
-            onRecalculate={recalcTargets}
-            customized={targetsCustomized}
-          />
+        {/* Left column: client + targets (collapsible on mobile) */}
+        <section className="space-y-3 lg:col-span-3 lg:space-y-4">
+          {/* Mobile-only collapse header with summary */}
+          <button
+            type="button"
+            onClick={() => setClientOpen((o) => !o)}
+            className="bg-card hover:bg-muted/40 flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors lg:hidden"
+            aria-expanded={clientOpen}
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">
+                {client.name.trim() || "Client details"}
+              </p>
+              <p className="text-muted-foreground truncate text-xs">
+                {client.weightKg}kg · {client.heightCm}cm · {client.age}y ·{" "}
+                {GOAL_LABELS[client.goal]} · {targets.calories} kcal
+              </p>
+            </div>
+            <ChevronDown
+              className={cn(
+                "text-muted-foreground size-5 shrink-0 transition-transform",
+                clientOpen && "rotate-180"
+              )}
+            />
+          </button>
+
+          {/* Form cards — always shown on desktop, toggled on mobile */}
+          <div
+            className={cn(
+              "space-y-3 lg:!block lg:space-y-4",
+              !clientOpen && "hidden"
+            )}
+          >
+            <ClientForm client={client} onChange={setClient} />
+            <MacroTargets
+              targets={targets}
+              onChange={handleTargetsChange}
+              onRecalculate={recalcTargets}
+              customized={targetsCustomized}
+            />
+          </div>
         </section>
 
         {/* Center column: meal plan */}
         <section className="space-y-3 lg:col-span-5">
-          <MacroTotals actual={dayTotals} target={targets} />
+          {/* Sticky macro totals on mobile, normal flow on desktop */}
+          <div className="bg-muted/30 sticky top-[3.25rem] z-10 -mx-4 px-4 py-2 lg:static lg:bg-transparent lg:mx-0 lg:px-0 lg:py-0">
+            <MacroTotals actual={dayTotals} target={targets} />
+          </div>
 
           <Card>
             <CardHeader className="space-y-3">
@@ -245,17 +284,18 @@ export default function Home() {
                   Add day
                 </Button>
               </div>
-              <div className="-mx-1 flex flex-wrap items-center gap-2 overflow-x-auto px-1">
+              <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1">
                 {days.map((d) => {
                   const active = d.id === activeDayId
                   return (
                     <div
                       key={d.id}
-                      className={`flex items-center gap-1 rounded-md border px-2 py-1 text-sm transition-colors ${
+                      className={cn(
+                        "flex shrink-0 items-center gap-1 rounded-md border px-3 py-1.5 text-sm transition-colors lg:px-2 lg:py-1",
                         active
                           ? "bg-primary text-primary-foreground border-primary"
                           : "bg-background hover:bg-muted"
-                      }`}
+                      )}
                     >
                       {active ? (
                         <input
@@ -279,8 +319,9 @@ export default function Home() {
                           onClick={() => removeDay(d.id)}
                           className="hover:bg-background/20 ml-1 rounded p-0.5"
                           title="Remove day"
+                          aria-label={`Remove ${d.label}`}
                         >
-                          <X className="size-3" />
+                          <X className="size-4" />
                         </button>
                       )}
                     </div>

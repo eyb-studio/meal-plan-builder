@@ -84,18 +84,25 @@ export function MealCard({
               if (!food) return null
               const m = macrosForGrams(food, it.grams)
               return (
-                <li key={it.id} className="flex items-center gap-2 py-2">
-                  <span className="text-xl leading-none">
-                    {food.emoji ?? CATEGORY_FALLBACK_EMOJI[food.category]}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{food.name}</p>
-                    <p className="text-muted-foreground text-xs tabular-nums">
-                      {round(m.calories)} kcal · P {round(m.protein, 1)} · C{" "}
-                      {round(m.carbs, 1)} · F {round(m.fat, 1)}
-                    </p>
+                <li
+                  key={it.id}
+                  className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center"
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="text-xl leading-none">
+                      {food.emoji ?? CATEGORY_FALLBACK_EMOJI[food.category]}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {food.name}
+                      </p>
+                      <p className="text-muted-foreground text-xs tabular-nums">
+                        {round(m.calories)} kcal · P {round(m.protein, 1)} · C{" "}
+                        {round(m.carbs, 1)} · F {round(m.fat, 1)}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 self-end sm:self-auto">
                     <GramsControl
                       value={it.grams}
                       step={stepForFood(food.gramsPerUnit)}
@@ -103,7 +110,7 @@ export function MealCard({
                     />
                     <Button
                       variant="ghost"
-                      size="icon-sm"
+                      size="icon"
                       onClick={() => onItemRemove(it.id)}
                       title="Remove item"
                     >
