@@ -34,6 +34,8 @@ type Props = {
   meal: Meal
   foods: Food[]
   customFoodIds: Set<string>
+  /** Food IDs ranked by usage; the picker shows the top few as quick-add chips. */
+  favoriteIds: string[]
   onClose: () => void
   onAddFood: (foodId: string) => void
   onAddCustomFood: (food: Food) => void
@@ -48,6 +50,7 @@ export function FoodPicker({
   meal,
   foods,
   customFoodIds,
+  favoriteIds,
   onClose,
   onAddFood,
   onAddCustomFood,
@@ -73,6 +76,19 @@ export function FoodPicker({
     })
   }, [foods, category, query])
 
+  // Resolve favorite IDs to Food objects, in the same order.
+  const favoriteFoods = useMemo(() => {
+    const byId = new Map(foods.map((f) => [f.id, f]))
+    return favoriteIds
+      .map((id) => byId.get(id))
+      .filter((f): f is Food => Boolean(f))
+      .slice(0, 8)
+  }, [foods, favoriteIds])
+
+  // Hide chips when filtering — they're meant as a fast start, not a competing list.
+  const showChips =
+    favoriteFoods.length > 0 && category === ALL && query.trim() === ""
+
   return (
     <div
       className={cn(
@@ -81,8 +97,8 @@ export function FoodPicker({
       )}
     >
       {/* Minimal header: title + close. Meal info lives in the meal card itself. */}
-      <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-        <p className="text-base font-semibold">Add food</p>
+      <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
+        <p className="text-sm font-semibold">Add food</p>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -92,6 +108,31 @@ export function FoodPicker({
           <X />
         </Button>
       </div>
+
+      {/* Suggested foods (most-used) — one-tap chips */}
+      {showChips && (
+        <div className="border-b px-3 py-2.5">
+          <p className="text-muted-foreground mb-1.5 text-xs font-medium uppercase tracking-wide">
+            Suggested
+          </p>
+          <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1">
+            {favoriteFoods.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => onAddFood(f.id)}
+                className="bg-muted hover:bg-muted/70 group flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors"
+                title={`Add ${f.name}`}
+              >
+                <span className="text-sm leading-none">
+                  {f.emoji ?? CATEGORY_FALLBACK_EMOJI[f.category]}
+                </span>
+                <span className="max-w-[10rem] truncate">{f.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tabs + search */}
       <div className="space-y-2 border-b px-3 py-3">

@@ -8,7 +8,14 @@ import { MacroTargets } from "~/components/plan/macro-targets"
 import { MacroTotals } from "~/components/plan/macro-totals"
 import { MealCard } from "~/components/plan/meal-card"
 import { SEED_FOODS } from "~/lib/foods"
-import { nextId, useLocalStorage, useScrollHidden } from "~/lib/hooks"
+import {
+  nextId,
+  useFoodUsage,
+  useLocalStorage,
+  useMealHistory,
+  useScrollHidden,
+  type MealCombo,
+} from "~/lib/hooks"
 import { GOAL_LABELS, defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
 import { exportPlanToPdf } from "~/lib/pdf"
 import { DEFAULT_CLIENT, makeDay, makeMeal } from "~/lib/plan-defaults"
@@ -37,6 +44,8 @@ export default function Home() {
     "fpg.custom-foods",
     []
   )
+  const { usage, recordUse } = useFoodUsage()
+  const { snapshot: snapshotMeal, getSuggestions } = useMealHistory()
 
   // Picker state — which meal is currently being edited.
   const [pickerMealId, setPickerMealId] = useState<string | null>(null)
@@ -79,6 +88,42 @@ export default function Home() {
     () => new Set(customFoods.map((f) => f.id)),
     [customFoods]
   )
+
+  // Top-N most-used foods, for the picker's suggestion chips.
+  const favoriteIds = useMemo(() => {
+    const known = new Set(allFoods.map((f) => f.id))
+    return Object.entries(usage)
+      .filter(([id, count]) => count > 0 && known.has(id))
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 8)
+      .map(([id]) => id)
+  }, [usage, allFoods])
+
+  // Snapshot a meal under its name. We intentionally do NOT snapshot on every
+  // keystroke — partial states would inflate the count of sub-combos.
+  const snapshotCurrentMeal = (mealId: string) => {
+    const meal = activeDay.meals.find((m) => m.id === mealId)
+    if (!meal || meal.items.length === 0) return
+    snapshotMeal(
+      meal.name,
+      meal.items.map((it) => ({ foodId: it.foodId, grams: it.grams }))
+    )
+  }
+
+  /**
+   * Single entry point for changing which meal the picker targets. Always
+   * snapshots the meal we're leaving — covers both "X / Done" and the more
+   * common "click + Add food on the next meal" flow where the picker never
+   * closes, it just switches.
+   */
+  const setPickerMeal = (nextMealId: string | null) => {
+    if (pickerMealId && pickerMealId !== nextMealId) {
+      snapshotCurrentMeal(pickerMealId)
+    }
+    setPickerMealId(nextMealId)
+  }
+
+  const closePicker = () => setPickerMeal(null)
 
   const activeDay = days.find((d) => d.id === activeDayId) ?? days[0]
 
@@ -139,6 +184,8 @@ export default function Home() {
         { id: nextId("item"), foodId, grams: defaultGramsForFood(food) },
       ],
     }))
+    // Track usage so the picker can surface this food as a quick-add chip later.
+    recordUse(foodId)
   }
 
   const updateItemGrams = (
@@ -164,6 +211,29 @@ export default function Home() {
       ...m,
       items: m.items.filter((it) => it.id !== itemId),
     }))
+
+  /** Replace the meal's items with a combo's items. Only valid foods carry through. */
+  const applySuggestion = (mealId: string, combo: MealCombo) => {
+    const validItems = combo.items.filter((it) => foodById.has(it.foodId))
+    if (validItems.length === 0) return
+    const meal = activeDay.meals.find((m) => m.id === mealId)
+    mapMeal(mealId, (m) => ({
+      ...m,
+      items: validItems.map((it) => ({
+        id: nextId("item"),
+        foodId: it.foodId,
+        grams: it.grams,
+      })),
+    }))
+    validItems.forEach((it) => recordUse(it.foodId))
+    // Applying a combo is itself a "use" — bump its count so it stays at the top.
+    if (meal) {
+      snapshotMeal(
+        meal.name,
+        validItems.map((it) => ({ foodId: it.foodId, grams: it.grams }))
+      )
+    }
+  }
 
   const addDay = () => {
     const newDay = makeDay(`Day ${days.length + 1}`)
@@ -204,7 +274,8 @@ export default function Home() {
         meal={pickerMeal}
         foods={allFoods}
         customFoodIds={customFoodIds}
-        onClose={() => setPickerMealId(null)}
+        favoriteIds={favoriteIds}
+        onClose={closePicker}
         onAddFood={(foodId) => addItem(foodId, pickerMeal.id)}
         onAddCustomFood={addCustomFood}
         onRemoveCustomFood={removeCustomFood}
@@ -350,7 +421,15 @@ export default function Home() {
                     meal={meal}
                     foodById={foodById}
                     active={pickerMealId === meal.id}
-                    onOpenPicker={() => setPickerMealId(meal.id)}
+                    suggestions={
+                      meal.items.length === 0
+                        ? getSuggestions(meal.name, 3)
+                        : []
+                    }
+                    onApplySuggestion={(combo) =>
+                      applySuggestion(meal.id, combo)
+                    }
+                    onOpenPicker={() => setPickerMeal(meal.id)}
                     onRename={(name) => renameMeal(meal.id, name)}
                     onRemove={() => removeMeal(meal.id)}
                     onItemGramsChange={(itemId, grams) =>
