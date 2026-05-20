@@ -1,6 +1,7 @@
 import { cn } from "~/lib/utils"
 import type { Macros } from "~/lib/types"
 import { round } from "~/lib/macros"
+import { MacroDonut } from "./macro-donut"
 
 type Props = {
   actual: Macros
@@ -8,56 +9,56 @@ type Props = {
   className?: string
 }
 
-const KEYS: Array<{ key: keyof Macros; label: string; unit: string }> = [
-  { key: "calories", label: "Calories", unit: "kcal" },
-  { key: "protein", label: "Protein", unit: "g" },
-  { key: "carbs", label: "Carbs", unit: "g" },
-  { key: "fat", label: "Fat", unit: "g" },
-]
-
-// Color the bar by how close actual is to the target. Within 5% is good,
-// over by more than 10% is too high, under by more than 10% is too low.
-function statusColor(actual: number, target: number): string {
-  if (target <= 0) return "bg-muted-foreground"
-  const pct = actual / target
-  if (pct >= 0.95 && pct <= 1.05) return "bg-emerald-500"
-  if (pct > 1.1) return "bg-red-500"
-  if (pct < 0.9) return "bg-amber-500"
-  return "bg-sky-500"
+type Row = {
+  key: "protein" | "carbs" | "fat"
+  label: string
+  shortLabel: string
+  color: string
+  dotColor: string
 }
+
+const ROWS: Row[] = [
+  { key: "protein", label: "Protein", shortLabel: "P", color: "bg-sky-500", dotColor: "bg-sky-500" },
+  { key: "carbs", label: "Carbs", shortLabel: "C", color: "bg-amber-500", dotColor: "bg-amber-500" },
+  { key: "fat", label: "Fat", shortLabel: "F", color: "bg-rose-500", dotColor: "bg-rose-500" },
+]
 
 export function MacroTotals({ actual, target, className }: Props) {
   return (
     <div
       className={cn(
-        "grid grid-cols-2 gap-3 rounded-lg border bg-card p-3 sm:grid-cols-4",
+        "bg-card flex items-center gap-4 rounded-lg border p-3",
         className
       )}
     >
-      {KEYS.map(({ key, label, unit }) => {
-        const a = actual[key]
-        const t = target[key]
-        const pct = t > 0 ? Math.min(100, (a / t) * 100) : 0
-        return (
-          <div key={key} className="min-w-0">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-muted-foreground text-xs font-medium">
-                {label}
-              </span>
-              <span className="text-xs tabular-nums">
-                <span className="font-semibold">{round(a)}</span>
-                <span className="text-muted-foreground"> / {t} {unit}</span>
-              </span>
+      <MacroDonut actual={actual} target={target} size={104} strokeWidth={10} />
+      <div className="grid flex-1 grid-cols-1 gap-2.5">
+        {ROWS.map((row) => {
+          const a = actual[row.key]
+          const t = target[row.key]
+          const pct = t > 0 ? Math.min(100, (a / t) * 100) : 0
+          return (
+            <div key={row.key} className="min-w-0">
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={cn("size-2 rounded-full", row.dotColor)} />
+                  <span className="text-xs font-medium">{row.label}</span>
+                </div>
+                <span className="text-xs tabular-nums">
+                  <span className="font-semibold">{round(a)}</span>
+                  <span className="text-muted-foreground"> / {t} g</span>
+                </span>
+              </div>
+              <div className="bg-muted mt-1 h-1.5 w-full overflow-hidden rounded-full">
+                <div
+                  className={cn("h-full rounded-full transition-all", row.color)}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
             </div>
-            <div className="bg-muted mt-1.5 h-1.5 w-full overflow-hidden rounded-full">
-              <div
-                className={cn("h-full rounded-full transition-all", statusColor(a, t))}
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -1,71 +1,106 @@
+import { useEffect, useRef, useState } from "react"
 import { Minus, Plus } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
+import { hasUnit } from "~/lib/units"
 import { cn } from "~/lib/utils"
+import type { Food } from "~/lib/types"
 
 export type GramsUpdater = number | ((prev: number) => number)
 
 type Props = {
+  food: Food
   value: number
-  /** Increment/decrement step in grams. Defaults to 50. */
-  step?: number
-  /**
-   * Receives either an absolute number (typed in the input) or a function of
-   * the previous value (for +/- clicks). Pass the function form through to
-   * setState so rapid clicks don't coalesce on stale closure values.
-   */
   onChange: (value: GramsUpdater) => void
   className?: string
 }
 
-export function GramsControl({
-  value,
-  step = 50,
-  onChange,
-  className,
-}: Props) {
+/**
+ * Compact grams control. Renders as `[–] value [+]` where the middle is
+ * tap-to-edit. For unit-based foods (eggs, scoops) the stepper increments
+ * by one unit; otherwise it steps by 50g.
+ */
+export function GramsControl({ food, value, onChange, className }: Props) {
+  const step = stepForFood(food)
+  const unit = hasUnit(food)
+
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [editing])
+
+  const commit = () => {
+    const parsed = Number(draft)
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      const grams = unit ? parsed * food.gramsPerUnit! : parsed
+      onChange(Math.round(grams))
+    }
+    setEditing(false)
+  }
+
+  const startEdit = () => {
+    setDraft(unit ? formatUnits(value / food.gramsPerUnit!) : String(value))
+    setEditing(true)
+  }
+
   const dec = () => onChange((prev) => Math.max(0, prev - step))
   const inc = () => onChange((prev) => prev + step)
 
-  const divider = <div className="bg-border self-stretch w-px" aria-hidden />
+  const display = unit
+    ? `${formatUnits(value / food.gramsPerUnit!)} × ${food.servingUnit}`
+    : `${value} g`
 
   return (
     <div
       className={cn(
-        "bg-background flex items-center rounded-md border",
+        "bg-background inline-flex items-center rounded-full border",
         className
       )}
     >
       <Button
         variant="ghost"
-        size="icon-lg"
-        className="rounded-r-none"
+        size="icon-sm"
+        className="rounded-full"
         onClick={dec}
         disabled={value <= 0}
-        aria-label={`Decrease by ${step}g`}
-        title={`-${step}g`}
+        aria-label={unit ? `-1 ${food.servingUnit}` : `-${step}g`}
       >
         <Minus />
       </Button>
-      {divider}
-      <Input
-        type="number"
-        min={0}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value) || 0)}
-        className="h-9 min-w-14 flex-auto rounded-none border-0 px-1 text-center tabular-nums focus-visible:ring-0 sm:w-16 sm:flex-none"
-      />
-      {divider}
-      <span className="text-muted-foreground px-3 py-1 text-sm">g</span>
-      {divider}
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit()
+            if (e.key === "Escape") setEditing(false)
+          }}
+          inputMode="decimal"
+          className="w-16 bg-transparent text-center text-sm tabular-nums outline-none"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={startEdit}
+          className="hover:text-foreground min-w-16 px-1.5 text-center text-sm tabular-nums transition-colors"
+          title="Tap to edit"
+        >
+          {display}
+        </button>
+      )}
       <Button
         variant="ghost"
-        size="icon-lg"
-        className="rounded-l-none"
+        size="icon-sm"
+        className="rounded-full"
         onClick={inc}
-        aria-label={`Increase by ${step}g`}
-        title={`+${step}g`}
+        aria-label={unit ? `+1 ${food.servingUnit}` : `+${step}g`}
       >
         <Plus />
       </Button>
@@ -73,7 +108,11 @@ export function GramsControl({
   )
 }
 
-/** Pick a sensible step for a food. Unit-based foods use the unit weight. */
-export function stepForFood(gramsPerUnit?: number): number {
-  return gramsPerUnit ?? 50
+function stepForFood(food: Food): number {
+  return food.gramsPerUnit ?? 50
+}
+
+function formatUnits(n: number): string {
+  const rounded = Math.round(n * 10) / 10
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
 }

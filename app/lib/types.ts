@@ -66,3 +66,14 @@ export type Day = {
   label: string
   meals: Meal[]
 }
+
+export type Plan = {
+  id: string
+  client: Client
+  targets: Macros
+  /** True once the coach has manually edited targets; freezes auto-recalc. */
+  targetsCustomized: boolean
+  days: Day[]
+  createdAt: number
+  updatedAt: number
+}

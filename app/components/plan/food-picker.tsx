@@ -41,9 +41,6 @@ type Props = {
   onAddCustomFood: (food: Food) => void
   onRemoveCustomFood: (foodId: string) => void
   className?: string
-  // When true, the picker constrains its own height (useful as a sticky desktop column).
-  // When false, it grows with content (inline mobile use).
-  selfScroll?: boolean
 }
 
 export function FoodPicker({
@@ -56,12 +53,10 @@ export function FoodPicker({
   onAddCustomFood,
   onRemoveCustomFood,
   className,
-  selfScroll = true,
 }: Props) {
   const [category, setCategory] = useState<CategoryFilter>(ALL)
   const [query, setQuery] = useState("")
 
-  // Reset filters when switching meals.
   useEffect(() => {
     setQuery("")
     setCategory(ALL)
@@ -76,7 +71,6 @@ export function FoodPicker({
     })
   }, [foods, category, query])
 
-  // Resolve favorite IDs to Food objects, in the same order.
   const favoriteFoods = useMemo(() => {
     const byId = new Map(foods.map((f) => [f.id, f]))
     return favoriteIds
@@ -85,7 +79,6 @@ export function FoodPicker({
       .slice(0, 8)
   }, [foods, favoriteIds])
 
-  // Hide chips when filtering — they're meant as a fast start, not a competing list.
   const showChips =
     favoriteFoods.length > 0 && category === ALL && query.trim() === ""
 
@@ -96,9 +89,15 @@ export function FoodPicker({
         className
       )}
     >
-      {/* Minimal header: title + close. Meal info lives in the meal card itself. */}
       <div className="flex items-center justify-between gap-2 border-b px-4 py-2.5">
-        <p className="text-sm font-semibold">Add food</p>
+        <p className="text-sm font-semibold">
+          Add food
+          {meal && (
+            <span className="text-muted-foreground ml-1.5 text-xs font-normal">
+              to {meal.name}
+            </span>
+          )}
+        </p>
         <Button
           variant="ghost"
           size="icon-sm"
@@ -109,11 +108,41 @@ export function FoodPicker({
         </Button>
       </div>
 
-      {/* Suggested foods (most-used) — one-tap chips */}
+      {/* Search-first: most-used path goes to the top. */}
+      <div className="space-y-2 border-b px-3 py-3">
+        <div className="relative">
+          <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
+          <Input
+            placeholder="Search foods..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+        <Tabs
+          value={category}
+          onValueChange={(v) => setCategory(v as CategoryFilter)}
+        >
+          <TabsList className="!h-auto flex w-full gap-1 p-1">
+            {TABS.map((t) => (
+              <TabsTrigger
+                key={t.value}
+                value={t.value}
+                className="!h-auto flex flex-1 min-w-0 items-center justify-center gap-1 px-1 py-1 text-xs font-medium"
+                title={t.label}
+              >
+                <span className="text-sm leading-none">{t.emoji}</span>
+                <span className="truncate leading-none">{t.label}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      </div>
+
       {showChips && (
         <div className="border-b px-3 py-2.5">
-          <p className="text-muted-foreground mb-1.5 text-xs font-medium uppercase tracking-wide">
-            Suggested
+          <p className="text-muted-foreground mb-1.5 text-[11px] font-medium uppercase tracking-wide">
+            Most used
           </p>
           <div className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1">
             {favoriteFoods.map((f) => (
@@ -121,7 +150,7 @@ export function FoodPicker({
                 key={f.id}
                 type="button"
                 onClick={() => onAddFood(f.id)}
-                className="bg-muted hover:bg-muted/70 group flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors"
+                className="bg-muted hover:bg-muted/70 flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors"
                 title={`Add ${f.name}`}
               >
                 <span className="text-sm leading-none">
@@ -134,44 +163,7 @@ export function FoodPicker({
         </div>
       )}
 
-      {/* Tabs + search */}
-      <div className="space-y-2 border-b px-3 py-3">
-        <Tabs
-          value={category}
-          onValueChange={(v) => setCategory(v as CategoryFilter)}
-        >
-          <TabsList className="!h-auto grid w-full grid-cols-7 gap-1 p-1">
-            {TABS.map((t) => (
-              <TabsTrigger
-                key={t.value}
-                value={t.value}
-                className="!h-auto flex flex-col gap-1 px-1 py-1.5 text-[11px] font-medium leading-none"
-                title={t.label}
-              >
-                <span className="text-lg leading-none">{t.emoji}</span>
-                <span className="leading-none">{t.label}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <div className="relative">
-          <Search className="text-muted-foreground absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-          <Input
-            placeholder="Search foods..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="pl-8"
-          />
-        </div>
-      </div>
-
-      {/* Food list */}
-      <div
-        className={cn(
-          selfScroll && "max-h-[28rem] overflow-y-auto",
-          "flex-1"
-        )}
-      >
+      <div className="max-h-[28rem] flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
           <div className="text-muted-foreground p-8 text-center text-sm">
             No foods match.
@@ -215,7 +207,6 @@ export function FoodPicker({
         )}
       </div>
 
-      {/* Footer */}
       <div className="flex items-center justify-between gap-2 border-t bg-card px-3 py-3">
         <AddCustomFoodDialog onAdd={onAddCustomFood} />
         <Button variant="outline" onClick={onClose}>

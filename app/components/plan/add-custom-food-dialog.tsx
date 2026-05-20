@@ -97,7 +97,7 @@ export function AddCustomFoodDialog({ onAdd }: Props) {
               onValueChange={(v) => setCategory(v as FoodCategory)}
             >
               <SelectTrigger className="w-full">
-                <SelectValue />
+                <SelectValue>{category}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {CATEGORIES.map((c) => (

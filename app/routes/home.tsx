@@ -1,12 +1,15 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, Download, FileText, Plus, X } from "lucide-react"
+import { Fragment, useEffect, useMemo, useState } from "react"
+import { Download, FileText, Plus, X } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card"
+import { Input } from "~/components/ui/input"
+import { useToast } from "~/components/ui/toaster"
 import { ClientForm } from "~/components/plan/client-form"
 import { FoodPicker } from "~/components/plan/food-picker"
 import { MacroTargets } from "~/components/plan/macro-targets"
 import { MacroTotals } from "~/components/plan/macro-totals"
 import { MealCard } from "~/components/plan/meal-card"
+import { PlansMenu } from "~/components/plan/plans-menu"
 import { SEED_FOODS } from "~/lib/foods"
 import {
   nextId,
@@ -16,10 +19,11 @@ import {
   useScrollHidden,
   type MealCombo,
 } from "~/lib/hooks"
-import { GOAL_LABELS, defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
+import { defaultMacros, itemsMacros, sumMacros } from "~/lib/macros"
 import { exportPlanToPdf } from "~/lib/pdf"
-import { DEFAULT_CLIENT, makeDay, makeMeal } from "~/lib/plan-defaults"
-import type { Client, Day, Food, Macros } from "~/lib/types"
+import { usePlans, planMutators } from "~/lib/plans"
+import { makeDay, makeMeal, DEFAULT_CLIENT } from "~/lib/plan-defaults"
+import type { Day, Food, Macros, Plan } from "~/lib/types"
 import { cn } from "~/lib/utils"
 
 export function meta() {
@@ -33,48 +37,56 @@ export function meta() {
 }
 
 export default function Home() {
-  const [client, setClient] = useState<Client>(DEFAULT_CLIENT)
-  const [targets, setTargets] = useState<Macros>(() =>
-    defaultMacros(DEFAULT_CLIENT)
-  )
-  const [targetsCustomized, setTargetsCustomized] = useState(false)
-  const [days, setDays] = useState<Day[]>(() => [makeDay("Day 1")])
-  const [activeDayId, setActiveDayId] = useState<string>(() => days[0].id)
+  const {
+    plans,
+    activePlan,
+    activePlanId,
+    setActivePlan,
+    updateActivePlan,
+    createPlan,
+    deletePlan,
+    ensureBootstrapped,
+  } = usePlans()
+
+  // First load: create a default plan if storage is empty.
+  useEffect(() => {
+    ensureBootstrapped()
+  }, [ensureBootstrapped])
+
+  const { toast } = useToast()
+
   const [customFoods, setCustomFoods] = useLocalStorage<Food[]>(
     "fpg.custom-foods",
     []
   )
+  const [coachName, setCoachName] = useLocalStorage<string>(
+    "fpg.coach-name",
+    ""
+  )
   const { usage, recordUse } = useFoodUsage()
   const { snapshot: snapshotMeal, getSuggestions } = useMealHistory()
 
-  // Picker state — which meal is currently being edited.
+  const [activeDayId, setActiveDayId] = useState<string | null>(null)
   const [pickerMealId, setPickerMealId] = useState<string | null>(null)
-
-  // Mobile-only: collapse the client + targets section once the coach has filled it in.
-  const [clientOpen, setClientOpen] = useState(true)
-
-  // Mobile-only: hide the header when scrolling down so the meal plan gets more space.
+  const [draggedMealId, setDraggedMealId] = useState<string | null>(null)
   const headerHidden = useScrollHidden()
 
-  // Recalculate targets when client data changes — unless the coach has overridden them.
-  const prevClientRef = useRef(client)
-  useEffect(() => {
-    if (prevClientRef.current === client) return
-    prevClientRef.current = client
-    if (!targetsCustomized) {
-      setTargets(defaultMacros(client))
-    }
-  }, [client, targetsCustomized])
+  // Source of truth — derive everything from the active plan.
+  const plan: Plan | null = activePlan
+  const client = plan?.client ?? DEFAULT_CLIENT
+  const targets = plan?.targets ?? defaultMacros(DEFAULT_CLIENT)
+  const targetsCustomized = plan?.targetsCustomized ?? false
+  const days = plan?.days ?? []
 
-  const handleTargetsChange = (next: Macros) => {
-    setTargets(next)
-    setTargetsCustomized(true)
-  }
+  // Keep active day in sync with the active plan. Resets to the plan's first
+  // day on plan switch or if the currently-active day was deleted.
+  const resolvedActiveDayId = useMemo(() => {
+    if (!days.length) return null
+    if (activeDayId && days.some((d) => d.id === activeDayId)) return activeDayId
+    return days[0].id
+  }, [days, activeDayId])
 
-  const recalcTargets = () => {
-    setTargets(defaultMacros(client))
-    setTargetsCustomized(false)
-  }
+  const activeDay = days.find((d) => d.id === resolvedActiveDayId) ?? days[0]
 
   const allFoods = useMemo<Food[]>(
     () => [...SEED_FOODS, ...customFoods],
@@ -89,7 +101,6 @@ export default function Home() {
     [customFoods]
   )
 
-  // Top-N most-used foods, for the picker's suggestion chips.
   const favoriteIds = useMemo(() => {
     const known = new Set(allFoods.map((f) => f.id))
     return Object.entries(usage)
@@ -99,52 +110,22 @@ export default function Home() {
       .map(([id]) => id)
   }, [usage, allFoods])
 
-  // Snapshot a meal under its name. We intentionally do NOT snapshot on every
-  // keystroke — partial states would inflate the count of sub-combos.
-  const snapshotCurrentMeal = (mealId: string) => {
-    const meal = activeDay.meals.find((m) => m.id === mealId)
-    if (!meal || meal.items.length === 0) return
-    snapshotMeal(
-      meal.name,
-      meal.items.map((it) => ({ foodId: it.foodId, grams: it.grams }))
-    )
-  }
+  // --- Mutation helpers ---
+  const setClient = (next: Plan["client"]) =>
+    updateActivePlan(planMutators.setClient(next))
 
-  /**
-   * Single entry point for changing which meal the picker targets. Always
-   * snapshots the meal we're leaving — covers both "X / Done" and the more
-   * common "click + Add food on the next meal" flow where the picker never
-   * closes, it just switches.
-   */
-  const setPickerMeal = (nextMealId: string | null) => {
-    if (pickerMealId && pickerMealId !== nextMealId) {
-      snapshotCurrentMeal(pickerMealId)
-    }
-    setPickerMealId(nextMealId)
-  }
+  const handleTargetsChange = (next: Macros) =>
+    updateActivePlan(planMutators.setTargets(next))
 
-  const closePicker = () => setPickerMeal(null)
+  const recalcTargets = () => updateActivePlan(planMutators.resetTargets())
 
-  const activeDay = days.find((d) => d.id === activeDayId) ?? days[0]
+  const mapDays = (fn: (days: Day[]) => Day[]) =>
+    updateActivePlan((p) => ({ ...p, days: fn(p.days) }))
 
-  // Currently-edited meal. Resolved fresh from state so re-renders stay in sync.
-  const pickerMeal = useMemo(
-    () =>
-      pickerMealId
-        ? activeDay.meals.find((m) => m.id === pickerMealId) ?? null
-        : null,
-    [activeDay, pickerMealId]
-  )
-
-  const dayTotals: Macros = useMemo(
-    () =>
-      sumMacros(activeDay.meals.map((m) => itemsMacros(m.items, foodById))),
-    [activeDay, foodById]
-  )
-
-  // --- Mutators (functional to stay safe under rapid clicks) ---
   const mapActiveDay = (fn: (d: Day) => Day) =>
-    setDays((ds) => ds.map((d) => (d.id === activeDayId ? fn(d) : d)))
+    mapDays((ds) =>
+      ds.map((d) => (d.id === activeDay?.id ? fn(d) : d))
+    )
 
   const mapMeal = (
     mealId: string,
@@ -155,6 +136,52 @@ export default function Home() {
       meals: d.meals.map((m) => (m.id === mealId ? fn(m) : m)),
     }))
 
+  // --- Undo plumbing: snapshot days/plan before destructive ops. ---
+  const planSnapshot = () => plan
+  const restorePlan = (snap: Plan | null) => {
+    if (!snap) return
+    updateActivePlan(() => snap)
+  }
+
+  // --- Meal picker management ---
+  const snapshotCurrentMeal = (mealId: string) => {
+    if (!activeDay) return
+    const meal = activeDay.meals.find((m) => m.id === mealId)
+    if (!meal || meal.items.length === 0) return
+    snapshotMeal(
+      meal.name,
+      meal.items.map((it) => ({ foodId: it.foodId, grams: it.grams }))
+    )
+  }
+
+  const setPickerMeal = (nextMealId: string | null) => {
+    if (pickerMealId && pickerMealId !== nextMealId) {
+      snapshotCurrentMeal(pickerMealId)
+    }
+    setPickerMealId(nextMealId)
+  }
+
+  const closePicker = () => setPickerMeal(null)
+
+  const pickerMeal = useMemo(
+    () =>
+      pickerMealId && activeDay
+        ? activeDay.meals.find((m) => m.id === pickerMealId) ?? null
+        : null,
+    [activeDay, pickerMealId]
+  )
+
+  const dayTotals: Macros = useMemo(
+    () =>
+      activeDay
+        ? sumMacros(activeDay.meals.map((m) => itemsMacros(m.items, foodById)))
+        : sumMacros([]),
+    [activeDay, foodById]
+  )
+
+  // --- Meal mutations ---
+  const defaultGramsForFood = (food: Food) => food.gramsPerUnit ?? 100
+
   const addMeal = () =>
     mapActiveDay((d) => ({
       ...d,
@@ -162,17 +189,83 @@ export default function Home() {
     }))
 
   const removeMeal = (mealId: string) => {
+    const snap = planSnapshot()
     mapActiveDay((d) => ({
       ...d,
       meals: d.meals.filter((m) => m.id !== mealId),
     }))
     if (pickerMealId === mealId) setPickerMealId(null)
+    toast({
+      message: "Meal removed",
+      action: { label: "Undo", onClick: () => restorePlan(snap) },
+    })
+  }
+
+  const duplicateMeal = (mealId: string) => {
+    mapActiveDay((d) => {
+      const idx = d.meals.findIndex((m) => m.id === mealId)
+      if (idx < 0) return d
+      const src = d.meals[idx]
+      const clone = {
+        id: nextId("meal"),
+        name: src.name,
+        items: src.items.map((it) => ({
+          id: nextId("item"),
+          foodId: it.foodId,
+          grams: it.grams,
+        })),
+      }
+      const next = [...d.meals]
+      next.splice(idx + 1, 0, clone)
+      return { ...d, meals: next }
+    })
+  }
+
+  const copyMealToDay = (mealId: string, destDayId: string) => {
+    if (!activeDay) return
+    const src = activeDay.meals.find((m) => m.id === mealId)
+    if (!src) return
+    mapDays((ds) =>
+      ds.map((d) => {
+        if (d.id !== destDayId) return d
+        return {
+          ...d,
+          meals: [
+            ...d.meals,
+            {
+              id: nextId("meal"),
+              name: src.name,
+              items: src.items.map((it) => ({
+                id: nextId("item"),
+                foodId: it.foodId,
+                grams: it.grams,
+              })),
+            },
+          ],
+        }
+      })
+    )
+    const destLabel = days.find((d) => d.id === destDayId)?.label ?? "day"
+    toast({ message: `Copied ${src.name} to ${destLabel}` })
   }
 
   const renameMeal = (mealId: string, name: string) =>
     mapMeal(mealId, (m) => ({ ...m, name }))
 
-  const defaultGramsForFood = (food: Food) => food.gramsPerUnit ?? 100
+  const reorderMeals = (fromId: string, toId: string) => {
+    if (fromId === toId || !activeDay) return
+    const fromIdx = activeDay.meals.findIndex((m) => m.id === fromId)
+    const toIdx = activeDay.meals.findIndex((m) => m.id === toId)
+    if (fromIdx < 0 || toIdx < 0) return
+    mapActiveDay((d) => {
+      const meals = [...d.meals]
+      const [moved] = meals.splice(fromIdx, 1)
+      meals.splice(toIdx, 0, moved)
+      return { ...d, meals }
+    })
+  }
+
+  const endDrag = () => setDraggedMealId(null)
 
   const addItem = (foodId: string, mealId: string) => {
     const food = foodById.get(foodId)
@@ -184,7 +277,6 @@ export default function Home() {
         { id: nextId("item"), foodId, grams: defaultGramsForFood(food) },
       ],
     }))
-    // Track usage so the picker can surface this food as a quick-add chip later.
     recordUse(foodId)
   }
 
@@ -206,16 +298,28 @@ export default function Home() {
       ),
     }))
 
-  const removeItem = (mealId: string, itemId: string) =>
+  const removeItem = (mealId: string, itemId: string) => {
+    const snap = planSnapshot()
+    const food = activeDay?.meals
+      .find((m) => m.id === mealId)
+      ?.items.find((it) => it.id === itemId)
+    const foodName = food
+      ? foodById.get(food.foodId)?.name ?? "Item"
+      : "Item"
     mapMeal(mealId, (m) => ({
       ...m,
       items: m.items.filter((it) => it.id !== itemId),
     }))
+    toast({
+      message: `${foodName} removed`,
+      action: { label: "Undo", onClick: () => restorePlan(snap) },
+    })
+  }
 
-  /** Replace the meal's items with a combo's items. Only valid foods carry through. */
   const applySuggestion = (mealId: string, combo: MealCombo) => {
     const validItems = combo.items.filter((it) => foodById.has(it.foodId))
     if (validItems.length === 0) return
+    if (!activeDay) return
     const meal = activeDay.meals.find((m) => m.id === mealId)
     mapMeal(mealId, (m) => ({
       ...m,
@@ -226,7 +330,6 @@ export default function Home() {
       })),
     }))
     validItems.forEach((it) => recordUse(it.foodId))
-    // Applying a combo is itself a "use" — bump its count so it stays at the top.
     if (meal) {
       snapshotMeal(
         meal.name,
@@ -235,40 +338,90 @@ export default function Home() {
     }
   }
 
+  // --- Day mutations ---
   const addDay = () => {
     const newDay = makeDay(`Day ${days.length + 1}`)
-    setDays((ds) => [...ds, newDay])
+    mapDays((ds) => [...ds, newDay])
     setActiveDayId(newDay.id)
   }
 
   const removeDay = (dayId: string) => {
     if (days.length === 1) return
-    setDays((ds) => {
-      const next = ds.filter((d) => d.id !== dayId)
-      if (dayId === activeDayId) setActiveDayId(next[0].id)
-      return next
+    const snap = planSnapshot()
+    mapDays((ds) => ds.filter((d) => d.id !== dayId))
+    if (dayId === activeDayId) {
+      const fallback = days.find((d) => d.id !== dayId)
+      setActiveDayId(fallback?.id ?? null)
+    }
+    toast({
+      message: "Day removed",
+      action: { label: "Undo", onClick: () => restorePlan(snap) },
     })
   }
 
+  const duplicateActiveDay = () => {
+    if (!activeDay) return
+    const cloneId = nextId("day")
+    const clone: Day = {
+      id: cloneId,
+      label: `${activeDay.label} (copy)`,
+      meals: activeDay.meals.map((m) => ({
+        id: nextId("meal"),
+        name: m.name,
+        items: m.items.map((it) => ({
+          id: nextId("item"),
+          foodId: it.foodId,
+          grams: it.grams,
+        })),
+      })),
+    }
+    mapDays((ds) => [...ds, clone])
+    setActiveDayId(cloneId)
+  }
+
   const renameDay = (dayId: string, label: string) =>
-    setDays((ds) => ds.map((d) => (d.id === dayId ? { ...d, label } : d)))
+    mapDays((ds) => ds.map((d) => (d.id === dayId ? { ...d, label } : d)))
 
   const addCustomFood = (food: Food) => setCustomFoods((cs) => [...cs, food])
   const removeCustomFood = (foodId: string) =>
     setCustomFoods((cs) => cs.filter((f) => f.id !== foodId))
 
   const handleExport = () => {
-    exportPlanToPdf({ client, targets, days, foodById })
+    if (!plan) return
+    exportPlanToPdf({ client, targets, days, foodById, coachName })
   }
 
   const canExport =
     client.name.trim().length > 0 &&
     days.some((d) => d.meals.some((m) => m.items.length > 0))
 
-  // Two FoodPicker instances exist at once (desktop right column + mobile inline).
-  // CSS hides whichever is off-layout; only the visible one is interactive.
-  // State inside each (search/filter) is local; it's fine if they don't sync.
-  const renderPicker = (selfScroll: boolean) =>
+  const handleDeletePlan = (id: string) => {
+    if (plans.length <= 1) return
+    const snap = plans
+    const activeSnap = activePlanId
+    deletePlan(id)
+    toast({
+      message: "Plan removed",
+      action: {
+        label: "Undo",
+        onClick: () => {
+          // Best-effort restore: re-create from snapshot by walking back.
+          const deleted = snap.find((p) => p.id === id)
+          if (!deleted) return
+          updateActivePlan((p) => p) // no-op to engage; restore by direct write below
+          // Hard restore: write all snapshot plans back via storage hook would be ideal,
+          // but we only expose updateActivePlan publicly. Re-create as a new plan
+          // with the same content; we lose the id but content is preserved.
+          // (Acceptable trade-off — undo for plan deletion is a rare path.)
+          const restored = createPlan()
+          updateActivePlan(() => ({ ...deleted, id: restored.id }))
+          if (activeSnap) setActivePlan(activeSnap)
+        },
+      },
+    })
+  }
+
+  const renderPicker = () =>
     pickerMeal && (
       <FoodPicker
         meal={pickerMeal}
@@ -279,9 +432,14 @@ export default function Home() {
         onAddFood={(foodId) => addItem(foodId, pickerMeal.id)}
         onAddCustomFood={addCustomFood}
         onRemoveCustomFood={removeCustomFood}
-        selfScroll={selfScroll}
       />
     )
+
+  const otherDays = useMemo(
+    () =>
+      activeDay ? days.filter((d) => d.id !== activeDay.id) : [],
+    [days, activeDay]
+  )
 
   return (
     <div className="bg-muted/30 min-h-svh">
@@ -292,68 +450,69 @@ export default function Home() {
         )}
       >
         <div className="container mx-auto flex items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <FileText className="text-primary size-5" />
-            <h1 className="font-semibold">Meal Plan Builder</h1>
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText className="text-primary size-5 shrink-0" />
+            <h1 className="hidden font-semibold sm:block">Meal Plan Builder</h1>
           </div>
-          <Button onClick={handleExport} disabled={!canExport}>
-            <Download />
-            Export PDF
-          </Button>
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="hidden min-w-0 items-center gap-1.5 md:flex">
+              <span className="text-muted-foreground shrink-0 text-xs font-medium">
+                Coach
+              </span>
+              <Input
+                value={coachName}
+                onChange={(e) => setCoachName(e.target.value)}
+                placeholder="Your name"
+                className="h-7 w-36 text-sm"
+                aria-label="Coach name shown on exported PDF"
+              />
+            </div>
+            <PlansMenu
+              plans={plans}
+              activePlanId={activePlanId}
+              onSelect={setActivePlan}
+              onCreate={createPlan}
+              onDelete={handleDeletePlan}
+            />
+            <Button onClick={handleExport} disabled={!canExport}>
+              <Download />
+              <span className="hidden sm:inline">Export PDF</span>
+              <span className="sm:hidden">PDF</span>
+            </Button>
+          </div>
         </div>
       </header>
 
       <main className="container mx-auto grid grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-12">
-        {/* Left column: client + targets (collapsible on mobile) */}
-        <section className="space-y-3 lg:col-span-3 lg:space-y-4">
-          {/* Mobile-only collapse header with summary */}
-          <button
-            type="button"
-            onClick={() => setClientOpen((o) => !o)}
-            className="bg-card hover:bg-muted/40 flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors lg:hidden"
-            aria-expanded={clientOpen}
-          >
-            <div className="min-w-0">
-              <p className="text-sm font-semibold">
-                {client.name.trim() || "Client details"}
-              </p>
-              <p className="text-muted-foreground truncate text-xs">
-                {client.weightKg}kg · {client.heightCm}cm · {client.age}y ·{" "}
-                {GOAL_LABELS[client.goal]} · {targets.calories} kcal
-              </p>
-            </div>
-            <ChevronDown
-              className={cn(
-                "text-muted-foreground size-5 shrink-0 transition-transform",
-                clientOpen && "rotate-180"
-              )}
-            />
-          </button>
-
-          {/* Form cards — always shown on desktop, toggled on mobile */}
-          <div
-            className={cn(
-              "space-y-3 lg:!block lg:space-y-4",
-              !clientOpen && "hidden"
-            )}
-          >
-            <ClientForm client={client} onChange={setClient} />
-            <MacroTargets
-              targets={targets}
-              onChange={handleTargetsChange}
-              onRecalculate={recalcTargets}
-              customized={targetsCustomized}
-            />
-          </div>
+        {/* Left: client summary + targets. Shrinks when the picker opens
+            so the meal plan + picker can share the rest of the width. */}
+        <section
+          className={cn(
+            "space-y-3",
+            pickerMealId ? "lg:col-span-3" : "lg:col-span-4"
+          )}
+        >
+          <ClientForm client={client} targets={targets} onChange={setClient} />
+          <MacroTargets
+            targets={targets}
+            onChange={handleTargetsChange}
+            onRecalculate={recalcTargets}
+            customized={targetsCustomized}
+          />
         </section>
 
-        {/* Center column: meal plan */}
-        <section className="space-y-3 lg:col-span-5">
-          {/* Sticky macro totals on mobile, normal flow on desktop.
-              Top moves up when the header hides so there's no empty gap. */}
+        {/* Centre: meal plan. */}
+        <section
+          className={cn(
+            "space-y-3",
+            pickerMealId ? "lg:col-span-5" : "lg:col-span-8"
+          )}
+        >
           <div
             className={cn(
-              "bg-muted/30 sticky z-10 -mx-4 px-4 py-2 transition-[top] duration-200 lg:static lg:bg-transparent lg:mx-0 lg:px-0 lg:py-0",
+              "bg-muted/30 sticky z-10 -mx-4 px-4 py-2 transition-[top] duration-200",
+              // Desktop header stays visible, so always anchor the bar just below it.
+              "lg:mx-0 lg:top-[3.25rem] lg:bg-transparent lg:px-0 lg:py-0",
               headerHidden ? "top-0" : "top-[3.25rem]"
             )}
           >
@@ -364,63 +523,77 @@ export default function Home() {
             <CardHeader className="space-y-3">
               <div className="flex items-center justify-between">
                 <CardTitle>Meal plan</CardTitle>
-                <Button variant="outline" size="sm" onClick={addDay}>
-                  <Plus />
-                  Add day
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={duplicateActiveDay}
+                    disabled={!activeDay}
+                    title="Duplicate this day"
+                  >
+                    Duplicate day
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={addDay}>
+                    <Plus />
+                    Add day
+                  </Button>
+                </div>
               </div>
-              <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1">
-                {days.map((d) => {
-                  const active = d.id === activeDayId
-                  return (
-                    <div
-                      key={d.id}
-                      className={cn(
-                        "flex shrink-0 items-center gap-1 rounded-md border px-3 py-1.5 text-sm transition-colors lg:px-2 lg:py-1",
-                        active
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background hover:bg-muted"
-                      )}
-                    >
-                      {active ? (
-                        <input
-                          aria-label="Rename day"
-                          value={d.label}
-                          onChange={(e) => renameDay(d.id, e.target.value)}
-                          className="placeholder:text-primary-foreground/60 w-20 bg-transparent text-sm font-medium outline-none"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setActiveDayId(d.id)}
-                          className="font-medium"
-                        >
-                          {d.label}
-                        </button>
-                      )}
-                      {days.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeDay(d.id)}
-                          className="hover:bg-background/20 ml-1 rounded p-0.5"
-                          title="Remove day"
-                          aria-label={`Remove ${d.label}`}
-                        >
-                          <X className="size-4" />
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+              {days.length > 0 && (
+                <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1">
+                  {days.map((d) => {
+                    const isActive = d.id === activeDay?.id
+                    return (
+                      <div
+                        key={d.id}
+                        className={cn(
+                          "flex shrink-0 items-center gap-1 rounded-md border px-3 py-1.5 text-sm transition-colors lg:px-2 lg:py-1",
+                          isActive
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-muted"
+                        )}
+                      >
+                        {isActive ? (
+                          <input
+                            aria-label="Rename day"
+                            value={d.label}
+                            onChange={(e) => renameDay(d.id, e.target.value)}
+                            className="placeholder:text-primary-foreground/60 w-24 bg-transparent text-sm font-medium outline-none"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setActiveDayId(d.id)}
+                            className="font-medium"
+                          >
+                            {d.label}
+                          </button>
+                        )}
+                        {days.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeDay(d.id)}
+                            className="hover:bg-background/20 ml-1 rounded p-0.5"
+                            title="Remove day"
+                            aria-label={`Remove ${d.label}`}
+                          >
+                            <X className="size-4" />
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </CardHeader>
             <CardContent className="space-y-3">
-              {activeDay.meals.map((meal) => (
+              {activeDay?.meals.map((meal) => (
                 <Fragment key={meal.id}>
                   <MealCard
                     meal={meal}
                     foodById={foodById}
                     active={pickerMealId === meal.id}
+                    otherDays={otherDays.map((d) => ({ id: d.id, label: d.label }))}
                     suggestions={
                       meal.items.length === 0
                         ? getSuggestions(meal.name, 3)
@@ -432,14 +605,27 @@ export default function Home() {
                     onOpenPicker={() => setPickerMeal(meal.id)}
                     onRename={(name) => renameMeal(meal.id, name)}
                     onRemove={() => removeMeal(meal.id)}
+                    onDuplicate={() => duplicateMeal(meal.id)}
+                    onCopyToDay={(destId) => copyMealToDay(meal.id, destId)}
                     onItemGramsChange={(itemId, grams) =>
                       updateItemGrams(meal.id, itemId, grams)
                     }
                     onItemRemove={(itemId) => removeItem(meal.id, itemId)}
+                    isDragging={draggedMealId === meal.id}
+                    onDragStart={() => setDraggedMealId(meal.id)}
+                    onDragEnd={endDrag}
+                    onDragOver={() => {
+                      // Live reorder: shuffle into the new slot as soon as the
+                      // cursor enters another meal. The drop is just a commit.
+                      if (draggedMealId && draggedMealId !== meal.id) {
+                        reorderMeals(draggedMealId, meal.id)
+                      }
+                    }}
+                    onDrop={endDrag}
                   />
-                  {/* Mobile/tablet only: inline picker below the active meal */}
+                  {/* Mobile: inline picker below the active meal */}
                   {pickerMealId === meal.id && (
-                    <div className="lg:hidden">{renderPicker(false)}</div>
+                    <div className="lg:hidden">{renderPicker()}</div>
                   )}
                 </Fragment>
               ))}
@@ -451,22 +637,18 @@ export default function Home() {
           </Card>
         </section>
 
-        {/* Right column (desktop only): permanent picker slot */}
-        <aside className="hidden lg:col-span-4 lg:block">
-          <div className="sticky top-[4.5rem]">
-            {pickerMeal ? (
-              renderPicker(true)
-            ) : (
-              <Card>
-                <CardContent className="text-muted-foreground p-8 text-center text-sm">
-                  Click <span className="font-medium">Add food</span> on any
-                  meal to start picking.
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </aside>
+        {/* Desktop: picker is a third column that slides in from the right.
+            Mobile renders the picker inline below the active meal (above). */}
+        {pickerMeal && (
+          <aside
+            key={pickerMeal.id}
+            className="hidden animate-in slide-in-from-right-4 fade-in-0 duration-200 lg:col-span-4 lg:block"
+          >
+            <div className="sticky top-[4.5rem]">{renderPicker()}</div>
+          </aside>
+        )}
       </main>
     </div>
   )
 }
+
