@@ -2,7 +2,16 @@ import { Fragment, useEffect, useMemo, useState } from "react"
 import { Download, FileText, Plus, X } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
+import { Label } from "~/components/ui/label"
 import { useToast } from "~/components/ui/toaster"
 import { ClientForm } from "~/components/plan/client-form"
 import { FoodPicker } from "~/components/plan/food-picker"
@@ -386,14 +395,37 @@ export default function Home() {
   const removeCustomFood = (foodId: string) =>
     setCustomFoods((cs) => cs.filter((f) => f.id !== foodId))
 
-  const handleExport = () => {
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+
+  const exportNow = (overrides?: { clientName?: string; coachName?: string }) => {
     if (!plan) return
-    exportPlanToPdf({ client, targets, days, foodById, coachName })
+    const effectiveClient = overrides?.clientName
+      ? { ...client, name: overrides.clientName }
+      : client
+    const effectiveCoach = overrides?.coachName ?? coachName
+    exportPlanToPdf({
+      client: effectiveClient,
+      targets,
+      days,
+      foodById,
+      coachName: effectiveCoach,
+    })
   }
 
-  const canExport =
-    client.name.trim().length > 0 &&
-    days.some((d) => d.meals.some((m) => m.items.length > 0))
+  const handleExportClick = () => {
+    if (!plan) return
+    const needsClient = !client.name.trim()
+    const needsCoach = !coachName.trim()
+    if (needsClient || needsCoach) {
+      setExportDialogOpen(true)
+      return
+    }
+    exportNow()
+  }
+
+  // Button stays enabled as long as there's content to export — missing names
+  // are handled by the dialog rather than gating the button.
+  const canExport = days.some((d) => d.meals.some((m) => m.items.length > 0))
 
   const handleDeletePlan = (id: string) => {
     if (plans.length <= 1) return
@@ -474,7 +506,7 @@ export default function Home() {
               onCreate={createPlan}
               onDelete={handleDeletePlan}
             />
-            <Button onClick={handleExport} disabled={!canExport}>
+            <Button onClick={handleExportClick} disabled={!canExport}>
               <Download />
               <span className="hidden sm:inline">Export PDF</span>
               <span className="sm:hidden">PDF</span>
@@ -648,7 +680,122 @@ export default function Home() {
           </aside>
         )}
       </main>
+
+      <ExportDetailsDialog
+        open={exportDialogOpen}
+        clientName={client.name}
+        coachName={coachName}
+        onCancel={() => setExportDialogOpen(false)}
+        onSubmit={({ clientName, coachName: nextCoach }) => {
+          setClient({ ...client, name: clientName })
+          setCoachName(nextCoach)
+          setExportDialogOpen(false)
+          // Use the freshly-entered values for this export — state updates
+          // from setClient/setCoachName won't be visible synchronously.
+          exportNow({ clientName, coachName: nextCoach })
+        }}
+      />
     </div>
+  )
+}
+
+function ExportDetailsDialog({
+  open,
+  clientName,
+  coachName,
+  onCancel,
+  onSubmit,
+}: {
+  open: boolean
+  clientName: string
+  coachName: string
+  onCancel: () => void
+  onSubmit: (vals: { clientName: string; coachName: string }) => void
+}) {
+  const needsClient = !clientName.trim()
+  const needsCoach = !coachName.trim()
+  const [draftClient, setDraftClient] = useState(clientName)
+  const [draftCoach, setDraftCoach] = useState(coachName)
+
+  // Re-sync drafts whenever the dialog re-opens with new defaults.
+  useEffect(() => {
+    if (open) {
+      setDraftClient(clientName)
+      setDraftCoach(coachName)
+    }
+  }, [open, clientName, coachName])
+
+  const canSubmit = draftClient.trim().length > 0 && draftCoach.trim().length > 0
+
+  const handleSubmit = () => {
+    if (!canSubmit) return
+    onSubmit({
+      clientName: draftClient.trim(),
+      coachName: draftCoach.trim(),
+    })
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCancel()
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Almost there</DialogTitle>
+          <DialogDescription>
+            {needsClient && needsCoach
+              ? "Add the client and coach name so they appear on the PDF."
+              : needsClient
+                ? "Add the client name so it appears on the PDF."
+                : "Add your name so it appears on the PDF as the coach."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          {needsClient && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ex-client">Client name</Label>
+              <Input
+                id="ex-client"
+                autoFocus
+                placeholder="Client name"
+                value={draftClient}
+                onChange={(e) => setDraftClient(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSubmit) handleSubmit()
+                }}
+              />
+            </div>
+          )}
+          {needsCoach && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ex-coach">Coach name</Label>
+              <Input
+                id="ex-coach"
+                autoFocus={!needsClient}
+                placeholder="Your name"
+                value={draftCoach}
+                onChange={(e) => setDraftCoach(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSubmit) handleSubmit()
+                }}
+              />
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={!canSubmit}>
+            <Download />
+            Export PDF
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
